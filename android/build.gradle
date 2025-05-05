@@ -20,6 +20,7 @@ buildscript {
 apply plugin: 'com.android.library'
 
 android {
+  namespace 'com.airbnb.android.react.maps'
   compileSdkVersion safeExtGet('compileSdkVersion', 30)
 
   defaultConfig {
