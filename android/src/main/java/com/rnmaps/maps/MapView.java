@@ -254,6 +254,14 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
                    GoogleMapOptions googleMapOptions) {
         super(context, googleMapOptions);
         this.context = context;
+
+        // HACK (jlandry): Register lifecycle observer immmediately. This seems to be crucial
+        //  for properly rendering custom map markers. attachLifecycleObserver is re-entrant so
+        //  attempting to attach twice should have no side-effects.
+        //
+        //  See https://linear.app/roundtripai/issue/EAS-5322
+        attachLifecycleObserver();
+
         super.getMapAsync(this);
 
         final MapView view = this;
