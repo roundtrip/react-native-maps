@@ -89,8 +89,6 @@ import com.rnmaps.fabric.event.*;
 public class MapView extends com.google.android.gms.maps.MapView implements GoogleMap.InfoWindowAdapter,
         GoogleMap.OnMarkerDragListener, OnMapReadyCallback, GoogleMap.OnPoiClickListener, GoogleMap.OnIndoorStateChangeListener, DefaultLifecycleObserver {
     public GoogleMap map;
-    private Bundle savedMapState;
-    private Map<Integer, MapFeature> savedFeatures = new HashMap<>();
 
     private MarkerManager markerManager;
     private MarkerManager.Collection markerCollection;
@@ -105,6 +103,7 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
     private RelativeLayout mapLoadingLayout;
     private ImageView cacheImageView;
     private Boolean isMapLoaded = false;
+    private Boolean isMapViewCreated = false;
 
     private Boolean isMapReady = false;
 
@@ -168,75 +167,51 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
     private Boolean scrollDuringRotateOrZoomEnabled;
     private String kmlSrc = null;
 
-    private static boolean contextHasBug(Context context) {
-        return context == null ||
-                context.getResources() == null ||
-                context.getResources().getConfiguration() == null;
-    }
-
-    // We do this to fix this bug:
-    // https://github.com/react-native-maps/react-native-maps/issues/271
-    //
-    // which conflicts with another bug regarding the passed in context:
-    // https://github.com/react-native-maps/react-native-maps/issues/1147
-    //
-    // Doing this allows us to avoid both bugs.
-    private static Context getNonBuggyContext(ThemedReactContext reactContext,
-                                              ReactApplicationContext appContext) {
-        Context superContext = reactContext;
-        if (!contextHasBug(appContext.getCurrentActivity())) {
-            superContext = appContext.getCurrentActivity();
-        } else if (contextHasBug(superContext)) {
-            // we have the bug! let's try to find a better context to use
-            if (!contextHasBug(reactContext.getCurrentActivity())) {
-                superContext = reactContext.getCurrentActivity();
-            } else if (!contextHasBug(reactContext.getApplicationContext())) {
-                superContext = reactContext.getApplicationContext();
-            }
-
+    @Override
+    public void onCreate(@NonNull LifecycleOwner owner) {
+        if (isMapViewCreated || destroyed) {
+            return;
         }
-        return superContext;
-    }
-
-
-    @Override
-    public void onCreate(LifecycleOwner owner) {
-        super.onCreate(null);
+        MapView.this.onCreate((Bundle) null);
+        isMapViewCreated = true;
     }
 
     @Override
-    public void onStart(LifecycleOwner owner) {
-        super.onStart();
-    }
-
-    @Override
-    public void onResume(LifecycleOwner owner) {
-        if (hasPermissions() && map != null) {
-            //noinspection MissingPermission
-            map.setMyLocationEnabled(showUserLocation);
-            map.setLocationSource(fusedLocationSource);
+    public void onStart(@NonNull LifecycleOwner owner) {
+        if (destroyed) {
+            return;
         }
+        MapView.this.onStart();
+    }
+
+    @Override
+    public void onResume(@NonNull LifecycleOwner owner) {
         synchronized (MapView.this) {
             if (!destroyed) {
+                if (hasPermissions() && map != null) {
+                    //noinspection MissingPermission
+                    map.setMyLocationEnabled(showUserLocation);
+                    map.setLocationSource(fusedLocationSource);
+                }
                 MapView.this.onResume();
+                paused = false;
             }
-            paused = false;
         }
     }
 
 
     @Override
-    public void onPause(LifecycleOwner owner) {
-        super.onPause();
-        if (hasPermissions() && map != null) {
-            //noinspection MissingPermission
-            map.setMyLocationEnabled(false);
-        }
+    public void onPause(@NonNull LifecycleOwner owner) {
         synchronized (MapView.this) {
             if (!destroyed) {
+                if (hasPermissions() && map != null) {
+                    //noinspection MissingPermission
+                    map.setMyLocationEnabled(false);
+                }
                 MapView.this.onPause();
+                paused = true;
             }
-            paused = true;
+
         }
     }
 
@@ -246,7 +221,7 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
     }
 
     @Override
-    public void onDestroy(LifecycleOwner owner) {
+    public void onDestroy(@NonNull LifecycleOwner owner) {
         MapView.this.doDestroy();
     }
 
@@ -254,6 +229,8 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
                    GoogleMapOptions googleMapOptions) {
         super(context, googleMapOptions);
         this.context = context;
+        attachLifecycleObserver();
+        MapView.this.getMapAsync(this);
         super.getMapAsync(this);
 
         final MapView view = this;
@@ -317,52 +294,34 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
         attachLifecycleObserver();
-        if (savedMapState != null) {
-            super.onCreate(savedMapState);
-            super.onStart();
-            super.onResume();
-            prepareAttacherView();
-            getMapAsync((map)->{
-                onMapReady(map);
-                savedFeatures.forEach((index, feature) -> {
-                    addFeature(feature, index);
-                });
-            });
-        }
     }
 
     // Override onDetachedFromWindow to detach lifecycle observer
     @Override
     protected void onDetachedFromWindow() {
-        if (savedMapState == null) {
-            savedMapState = new Bundle();
-        }
-        super.onSaveInstanceState(savedMapState);
-        super.onPause();
-        super.onStop();
-        savedFeatures = new HashMap<>(features);
-        savedFeatures.keySet().forEach(this::removeFeatureAt);
-        removeView(attacherGroup);
-        attacherGroup = null;
-        detachLifecycleObserver();
         super.onDetachedFromWindow();
+        detachLifecycleObserver();
     }
 
-    // Method to attach lifecycle observer
     private void attachLifecycleObserver() {
         Activity activity = context.getCurrentActivity();
-        if (activity instanceof LifecycleOwner && !isLifecycleObserverAttached) {
-            currentLifecycleOwner = (LifecycleOwner) activity;
+        if (activity instanceof LifecycleOwner newOwner) {
+            if (currentLifecycleOwner == newOwner) {
+                return;
+            }
+            if (currentLifecycleOwner != null) {
+                currentLifecycleOwner.getLifecycle().removeObserver(this);
+            }
+
+            currentLifecycleOwner = newOwner;
             currentLifecycleOwner.getLifecycle().addObserver(this);
-            isLifecycleObserverAttached = true;
         }
     }
 
     // Method to detach lifecycle observer
     private void detachLifecycleObserver() {
-        if (currentLifecycleOwner != null && isLifecycleObserverAttached) {
+        if (currentLifecycleOwner != null) {
             currentLifecycleOwner.getLifecycle().removeObserver(this);
-            isLifecycleObserverAttached = false;
             currentLifecycleOwner = null;
         }
     }
@@ -741,16 +700,12 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
         }
         destroyed = true;
 
-        // Detach lifecycle observer before destroying
-        detachLifecycleObserver();
-        savedMapState = null;
-        savedFeatures = null;
-
         if (!paused) {
-            onPause();
+            MapView.this.onPause();
             paused = true;
         }
-        onDestroy();
+        MapView.this.onDestroy();
+        detachLifecycleObserver();
     }
 
     public void setInitialCameraSet(boolean initialCameraSet) {
